@@ -1,10 +1,12 @@
 use bitcoin::hashes::sha256d::Hash as Sha256dHash;
+use bitcoin::util::bip32::ExtendedPrivKey;
 use bitcoin::util::merkleblock::MerkleBlock;
 use bitcoin::VarInt;
 use crypto::digest::Digest;
 use crypto::sha2::Sha256;
 use itertools::Itertools;
 use rayon::prelude::*;
+use hex::FromHex;
 
 use bitcoin::consensus::encode::{deserialize, serialize};
 
@@ -902,6 +904,35 @@ fn add_blocks(block_entries: &[BlockEntry], iconfig: &IndexerConfig) -> Vec<DBRo
             if !iconfig.light_mode {
                 rows.push(BlockRow::new_txids(blockhash, &txids).into_row());
                 rows.push(BlockRow::new_meta(blockhash, &BlockMeta::from(b)).into_row());
+            }
+
+            match b.block.mweb_block {
+                Some(ref mweb_block) => {
+                    // Code below is temporary and for debugging purposes only!
+                    println!("Found MW block ({} outputs)", mweb_block.tx_body.outputs.len());
+                    for output in mweb_block.tx_body.outputs.as_slice() {
+                        match output.message.standard_fields {
+                            Some(ref std_fields) => {
+                                let secp = bitcoin::secp256k1::Secp256k1::new();
+                                let priv_scan_key = 
+                                    <[u8; 32]>::from_hex("40c9ede211c72e175cabbe70aac966eb4e2f7c5e843d327883ef0ec770367d0a")
+                                        .expect("hex string of length 64 expected");
+                                let mut shared_secret = 
+                                    std_fields.key_exchange_pubkey.clone();
+                                shared_secret.mul_assign(&secp, &priv_scan_key).unwrap();
+                                let mut hasher = blake3::Hasher::new();
+                                hasher.update("T".as_bytes());
+                                hasher.update(&shared_secret.serialize());
+                                let view_tag = hasher.finalize().as_bytes()[0];
+                                if view_tag == std_fields.view_tag {
+                                    println!("View tag equals");
+                                }
+                            }
+                            None => {}
+                        }
+                    }
+                }
+                None => {}
             }
 
             rows.push(BlockRow::new_header(&b).into_row());
