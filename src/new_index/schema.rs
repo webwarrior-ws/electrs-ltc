@@ -1,12 +1,11 @@
+use bitcoin::blockdata::mimblewimble;
 use bitcoin::hashes::sha256d::Hash as Sha256dHash;
-use bitcoin::util::bip32::ExtendedPrivKey;
 use bitcoin::util::merkleblock::MerkleBlock;
 use bitcoin::VarInt;
 use crypto::digest::Digest;
 use crypto::sha2::Sha256;
 use itertools::Itertools;
 use rayon::prelude::*;
-use hex::FromHex;
 
 use bitcoin::consensus::encode::{deserialize, serialize};
 
@@ -908,28 +907,8 @@ fn add_blocks(block_entries: &[BlockEntry], iconfig: &IndexerConfig) -> Vec<DBRo
 
             match b.block.mweb_block {
                 Some(ref mweb_block) => {
-                    // Code below is temporary and for debugging purposes only!
-                    println!("Found MW block ({} outputs)", mweb_block.tx_body.outputs.len());
                     for output in mweb_block.tx_body.outputs.as_slice() {
-                        match output.message.standard_fields {
-                            Some(ref std_fields) => {
-                                let secp = bitcoin::secp256k1::Secp256k1::new();
-                                let priv_scan_key = 
-                                    <[u8; 32]>::from_hex("40c9ede211c72e175cabbe70aac966eb4e2f7c5e843d327883ef0ec770367d0a")
-                                        .expect("hex string of length 64 expected");
-                                let mut shared_secret = 
-                                    std_fields.key_exchange_pubkey.clone();
-                                shared_secret.mul_assign(&secp, &priv_scan_key).unwrap();
-                                let mut hasher = blake3::Hasher::new();
-                                hasher.update("T".as_bytes());
-                                hasher.update(&shared_secret.serialize());
-                                let view_tag = hasher.finalize().as_bytes()[0];
-                                if view_tag == std_fields.view_tag {
-                                    println!("View tag equals");
-                                }
-                            }
-                            None => {}
-                        }
+                        rows.push(MWOutputRow::new(output.clone()).into_row());
                     }
                 }
                 None => {}
@@ -1465,6 +1444,45 @@ impl TxEdgeRow {
             key: bincode::deserialize(&row.key).expect("failed to deserialize TxEdgeKey"),
         }
     }
+}
+
+struct MWOutputRow {
+    output: mimblewimble::Output
+}
+
+impl MWOutputRow {
+    fn new(output: mimblewimble::Output) -> Self {
+        MWOutputRow { output: output }
+    }
+
+    fn get_key(hash: blake3::Hash) -> Vec<u8> {
+        [b"MWO".to_vec(), hash.as_bytes().to_vec()].concat()
+    }
+
+    fn into_row(self) -> DBRow {
+        DBRow {
+            key: MWOutputRow::get_key(get_output_id(&self.output)),
+            value: bincode::serialize(&self.output).expect("failed to deserialize MWOutputRow"),
+        }
+    }
+
+    fn from_row(row: DBRow) -> Self {
+        MWOutputRow {
+            output: bincode::deserialize(&row.value).unwrap(),
+        }
+    }
+}
+
+fn get_output_id(output: &mimblewimble::Output) -> blake3::Hash {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(&output.commitment);
+    hasher.update(&output.sender_public_key.serialize());
+    hasher.update(&output.receiver_public_key.serialize());
+    let message_hash = blake3::hash(serialize(&output.message).as_slice());
+    hasher.update(message_hash.as_bytes());
+    hasher.update(blake3::hash(&output.range_proof).as_bytes());
+    hasher.update(&output.signature);
+    return hasher.finalize();
 }
 
 #[derive(Serialize, Deserialize)]
