@@ -861,6 +861,66 @@ impl ChainQuery {
             |t| t == txid,
         ))
     }
+
+    /// Get MimbleWimble transaction outputs for given master private scan key
+    /// and spend pub keys.
+    pub fn get_mw_outputs(
+        &self, priv_scan_key: &[u8; 32], 
+        spend_pub_keys: Vec<bitcoin::secp256k1::PublicKey>
+    ) -> Vec<mimblewimble::Output> {
+        self.store.txstore_db.iter_scan(b"MWO")
+            .map(| row | { MWOutputRow::from_row(row).output })
+            .filter(| output | { identify_output(output, priv_scan_key, &spend_pub_keys) })
+            .collect_vec()
+    }
+}
+
+fn identify_output(
+    output: &mimblewimble::Output, 
+    priv_scan_key: &[u8; 32], 
+    spend_pub_keys: &Vec<bitcoin::secp256k1::PublicKey>
+) -> bool {
+    match output.message.standard_fields {
+        Some(ref std_fields) => {
+            let secp = bitcoin::secp256k1::Secp256k1::new();
+            let mut shared_secret = 
+                std_fields.key_exchange_pubkey.clone();
+            shared_secret.mul_assign(&secp, priv_scan_key).unwrap();
+            let mut hasher = blake3::Hasher::new();
+            hasher.update("T".as_bytes());
+            hasher.update(&shared_secret.serialize());
+            let view_tag = hasher.finalize().as_bytes()[0];
+            if view_tag == std_fields.view_tag {
+                // t
+                let ecdhe_shared_secret = {
+                    let mut hasher = blake3::Hasher::new();
+                    hasher.update("D".as_bytes());
+                    hasher.update(&shared_secret.serialize());
+                    hasher.finalize()
+                };
+
+                // B_i
+                let spend_pub_key: bitcoin::secp256k1::PublicKey = {
+                    let mut hasher = blake3::Hasher::new();
+                    hasher.update("O".as_bytes());
+                    hasher.update(ecdhe_shared_secret.as_bytes());
+                    let t_hashed = hasher.finalize().as_bytes();
+                    let t_inverse = todo!("inverse modulo scalar order");
+                    let mut result = output.receiver_public_key.clone();
+                    result
+                        .mul_assign(&secp, t_inverse)
+                        .unwrap();
+                    result
+                };
+
+                return spend_pub_keys.contains(&spend_pub_key);
+            }
+            else {
+                return false;
+            }
+        }
+        None => { return false }
+    }
 }
 
 fn load_blockhashes(db: &DB, prefix: &[u8]) -> HashSet<BlockHash> {
