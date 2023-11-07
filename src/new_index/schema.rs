@@ -5,6 +5,7 @@ use bitcoin::VarInt;
 use crypto::digest::Digest;
 use crypto::sha2::Sha256;
 use itertools::Itertools;
+use num_bigint_dig::{self, ModInverse};
 use rayon::prelude::*;
 
 use bitcoin::consensus::encode::{deserialize, serialize};
@@ -904,11 +905,21 @@ fn identify_output(
                     let mut hasher = blake3::Hasher::new();
                     hasher.update("O".as_bytes());
                     hasher.update(ecdhe_shared_secret.as_bytes());
-                    let t_hashed = hasher.finalize().as_bytes();
-                    let t_inverse = todo!("inverse modulo scalar order");
+                    let t_hashed = hasher.finalize();
+                    // secp256k1 scalar order
+                    let scalar_order = 
+                        num_bigint_dig::BigUint::parse_bytes(
+                            b"fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141",
+                            16)
+                            .unwrap();
+                    let (_, t_inverse) = 
+                        num_bigint_dig::BigUint::from_bytes_be(t_hashed.as_bytes())
+                            .mod_inverse(scalar_order)
+                            .unwrap()
+                            .to_bytes_be();
                     let mut result = output.receiver_public_key.clone();
                     result
-                        .mul_assign(&secp, t_inverse)
+                        .mul_assign(&secp, &t_inverse[..])
                         .unwrap();
                     result
                 };
