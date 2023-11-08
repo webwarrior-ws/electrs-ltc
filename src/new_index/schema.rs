@@ -249,6 +249,7 @@ impl Indexer {
         self.start_auto_compactions(&self.store.txstore_db);
 
         self.remove_spent_mw_outputs();
+        self.start_auto_compactions(&self.store.txstore_db);
 
         let to_index = self.headers_to_index(&new_headers);
         debug!(
@@ -321,12 +322,21 @@ impl Indexer {
         self.store.history_db.write(rows, self.flush);
     }
 
-    fn remove_spent_mw_outputs(self) {
-        let spent_output_ids: HashSet<_> = 
+    fn remove_spent_mw_outputs(&self) {
+        let spent_output_ids: Vec<_> = 
             self.store.txstore_db.iter_scan(b"MWSO")
-                .map(| row | row.key)
+                .map(| row | row.key[4..].to_owned() )
                 .collect();
-        // TODO: implement delete on DB
+        // TODO: bulk operation?
+        for output_id in &spent_output_ids {
+            let key = [ b"MWO", &output_id[..] ].concat();
+            self.store.txstore_db.delete(&key);
+        }
+        // delete all temporary MWSO{output-id} entries
+        for output_id in spent_output_ids {
+            let key = [ b"MWSO", &output_id[..] ].concat();
+            self.store.txstore_db.delete(&key);
+        }
     }
 }
 
