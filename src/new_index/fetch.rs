@@ -225,7 +225,16 @@ fn parse_blocks(blob: Vec<u8>, magic: u32) -> Result<Vec<SizedBlock>> {
     Ok(pool.install(|| {
         slices
             .into_par_iter()
-            .map(|(slice, size)| (deserialize(slice).expect("failed to parse Block"), size))
+            .map(|(slice, size)| {
+                let result = 
+                    deserialize(slice)
+                        .or_else(|err| {
+                            println!("Failed to parse block from slice {:#?}", &slice);
+                            ::std::result::Result::Err(err)
+                        })
+                        .expect("failed to parse Block");
+                (result, size)
+            })
             .collect()
     }))
 }
